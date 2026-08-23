@@ -1,22 +1,21 @@
 """
 main.py
 --------
-AirChord - Phase 1: Webcam Capture
+AirChord - Phase 2: Hand Detection & Landmark Visualization
 
-This phase covers only the first stage of the AirChord pipeline:
+Builds on Phase 1 by adding the next stage of the pipeline:
 
-    Webcam -> Video Frame Acquisition -> Frame Processing -> Real-time UI
+    ... -> Hand Detection (MediaPipe) -> Landmark Extraction -> Real-time UI
 
-What it does:
-    - Opens the default webcam using OpenCV
-    - Continuously reads frames in a loop (real-time video)
-    - Mirrors the frame horizontally (natural "selfie" view)
-    - Measures and displays FPS
-    - Handles a missing/disconnected webcam without crashing
-    - Shuts down cleanly on 'q', window close, or Ctrl+C
+What's new in this phase:
+    - Detects a hand in each frame using MediaPipe's HandLandmarker task
+    - Draws all 21 hand landmarks, the skeleton connecting them, and a
+      Left/Right label
+    - Shows whether a hand is currently detected
+    - Keeps running smoothly if no hand is in frame, or if a single
+      detection call fails
 
-Hand detection (MediaPipe), gesture recognition, and audio playback are
-NOT part of this phase - they are added in Phases 2-4.
+Gesture recognition (finger-state logic) and audio are added in Phases 3-4.
 """
 
 import sys
@@ -25,6 +24,7 @@ import time
 import cv2
 
 import config
+import hand_detector
 
 
 def open_webcam(camera_index: int) -> cv2.VideoCapture:
@@ -34,8 +34,6 @@ def open_webcam(camera_index: int) -> cv2.VideoCapture:
     camera can't be opened, so the caller can show a clear message and
     exit gracefully instead of crashing.
     """
-    # On Windows, the default backend (MSMF) can be slow to open and prints
-    # noisy warnings. DirectShow (CAP_DSHOW) tends to open faster/cleaner.
     if sys.platform == "win32":
         cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     else:
@@ -53,25 +51,38 @@ def open_webcam(camera_index: int) -> cv2.VideoCapture:
     return cap
 
 
-def draw_overlay(frame, fps: float):
-    """Draw the Phase 1 UI text (title, FPS, instructions) onto the frame."""
-    cv2.putText(frame, "AirChord - Phase 1 (Webcam Test)", (10, 30),
+def draw_overlay(frame, fps: float, hand_detected: bool):
+    """Draw the Phase 2 UI text (title, FPS, hand status, instructions)."""
+    cv2.putText(frame, "AirChord - Phase 2 (Hand Detection)", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
     cv2.putText(frame, f"FPS: {int(fps)}", (10, 60),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+    status_text = "Hand: DETECTED" if hand_detected else "Hand: NOT FOUND"
+    status_color = (0, 255, 0) if hand_detected else (0, 0, 255)
+    cv2.putText(frame, status_text, (10, 90),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+
     cv2.putText(frame, f"Press '{config.QUIT_KEY}' to quit", (10, frame.shape[0] - 15),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
     return frame
 
 
 def main():
-    print("Starting AirChord (Phase 1: webcam test)...")
+    print("Starting AirChord (Phase 2: hand detection)...")
     print(f"Press '{config.QUIT_KEY}' in the video window to quit.\n")
 
     try:
         cap = open_webcam(config.CAMERA_INDEX)
     except RuntimeError as e:
         print(f"[ERROR] {e}")
+        return
+
+    try:
+        detector = hand_detector.HandDetector()
+    except RuntimeError as e:
+        print(f"[ERROR] {e}")
+        cap.release()
         return
 
     prev_time = 0.0
@@ -91,18 +102,24 @@ def main():
                 continue
             consecutive_failures = 0
 
-            # Mirror the feed so it behaves like a mirror - natural for gestures
             frame = cv2.flip(frame, 1)
 
-            # --- FPS calculation (time between consecutive frames) ---
+            # --- Hand detection (guarded so one bad frame can't crash the app) ---
+            hand_detected = False
+            try:
+                result = detector.detect(frame)
+                hand_detected = bool(result.hand_landmarks)
+                frame = detector.draw_landmarks(frame, result)
+            except Exception as e:
+                print(f"[WARNING] Hand detection failed on this frame: {e}")
+
             current_time = time.time()
             fps = 1.0 / (current_time - prev_time) if prev_time else 0.0
             prev_time = current_time
 
-            frame = draw_overlay(frame, fps)
+            frame = draw_overlay(frame, fps, hand_detected)
             cv2.imshow(config.WINDOW_NAME, frame)
 
-            # Exit on 'q' key or if the window is closed via the OS close button
             key_pressed = cv2.waitKey(1) & 0xFF
             window_closed = cv2.getWindowProperty(config.WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1
             if key_pressed == ord(config.QUIT_KEY) or window_closed:
@@ -110,6 +127,7 @@ def main():
     except KeyboardInterrupt:
         print("\nInterrupted by user (Ctrl+C).")
     finally:
+        detector.close()
         cap.release()
         cv2.destroyAllWindows()
         print("Webcam released. AirChord closed cleanly.")
