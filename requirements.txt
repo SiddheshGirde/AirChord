@@ -11,5 +11,5 @@ numpy>=1.26
 # and then re-run this install.
 mediapipe>=1.0
 
-# Added in later phases - not needed yet:
-# pygame      (Phase 4 - audio playback)
+# Phase 4 - audio playback (chords are synthesized, so no audio assets needed)
+pygame>=2.5

@@ -1,21 +1,26 @@
 """
 main.py
 --------
-AirChord - Phase 2: Hand Detection & Landmark Visualization
+AirChord - Phase 4: Audio Playback
 
-Builds on Phase 1 by adding the next stage of the pipeline:
+Builds on Phase 3 by adding:
 
-    ... -> Hand Detection (MediaPipe) -> Landmark Extraction -> Real-time UI
+    ... -> Gesture-to-Chord Mapping -> Chord Audio Playback -> Real-time UI
 
 What's new in this phase:
-    - Detects a hand in each frame using MediaPipe's HandLandmarker task
-    - Draws all 21 hand landmarks, the skeleton connecting them, and a
-      Left/Right label
-    - Shows whether a hand is currently detected
-    - Keeps running smoothly if no hand is in frame, or if a single
-      detection call fails
+    - A newly-CONFIRMED chord gesture (not every frame it stays confirmed)
+      triggers chord_player.play_chord() - a single "strum" per gesture
+      change, matching "plays once when the gesture becomes stable"
+    - The dynamics hand's openness continuously drives playback volume,
+      live, every frame - not just at trigger time
+    - FIST stops all audio immediately
+    - A brief tracking gap (gesture -> NONE/UNKNOWN) does NOT cut the
+      currently playing chord - it's allowed to ring out/decay naturally
+    - Chords are SYNTHESIZED (see chord_player.py) rather than loaded from
+      files, so every one of the 12 keys works with zero audio assets
 
-Gesture recognition (finger-state logic) and audio are added in Phases 3-4.
+Everything from Phases 1-3 (webcam, hand detection, gestures, dynamics,
+scale selection) is unchanged.
 """
 
 import sys
@@ -24,7 +29,10 @@ import time
 import cv2
 
 import config
-import hand_detector
+import gesture
+from hand_detector import HandDetector
+from scale_selector import ScaleSelector
+from chord_player import ChordPlayer
 
 
 def open_webcam(camera_index: int) -> cv2.VideoCapture:
@@ -51,25 +59,101 @@ def open_webcam(camera_index: int) -> cv2.VideoCapture:
     return cap
 
 
-def draw_overlay(frame, fps: float, hand_detected: bool):
-    """Draw the Phase 2 UI text (title, FPS, hand status, instructions)."""
-    cv2.putText(frame, "AirChord - Phase 2 (Hand Detection)", (10, 30),
+def _default_state():
+    return {
+        "chord_hand_visible": False,
+        "dynamics_hand_visible": False,
+        "gesture": "NONE",
+        "chord": "-",
+        "dynamics_value": 0.0,
+    }
+
+
+def process_frame(frame, detector, stabilizer, root_note):
+    """
+    Run hand detection + gesture/dynamics interpretation on one frame.
+    Returns (frame_with_landmarks_drawn, state_dict).
+    """
+    state = _default_state()
+
+    result = detector.detect(frame)
+    frame = detector.draw_landmarks(frame, result)
+
+    chord_hand, dynamics_hand = gesture.split_hands_by_role(result)
+
+    if chord_hand is not None:
+        state["chord_hand_visible"] = True
+        finger_states = gesture.get_finger_states(chord_hand)
+        raw_gesture = gesture.classify_gesture(finger_states)
+        state["gesture"] = stabilizer.update(raw_gesture)
+    else:
+        # Let the stabilizer know the hand is gone so it releases a stale gesture.
+        state["gesture"] = stabilizer.update("NONE")
+
+    state["chord"] = gesture.gesture_to_chord(state["gesture"], root_note) or "-"
+
+    if dynamics_hand is not None:
+        state["dynamics_hand_visible"] = True
+        state["dynamics_value"] = gesture.calculate_dynamics(dynamics_hand)
+
+    return frame, state
+
+
+def draw_overlay(frame, fps: float, state: dict, root_note: str, status: str):
+    """Draw the Phase 4 UI text: title, FPS, key, hand statuses, playback status."""
+    cv2.putText(frame, "AirChord - Phase 4 (Audio)", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
     cv2.putText(frame, f"FPS: {int(fps)}", (10, 60),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    cv2.putText(frame, f"Key: {root_note}", (10, 85),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-    status_text = "Hand: DETECTED" if hand_detected else "Hand: NOT FOUND"
-    status_color = (0, 255, 0) if hand_detected else (0, 0, 255)
-    cv2.putText(frame, status_text, (10, 90),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+    chord_color = (0, 255, 0) if state["chord_hand_visible"] else (0, 0, 255)
+    if state["chord_hand_visible"]:
+        chord_text = f"Chords ({config.CHORD_HAND}): {state['gesture']} -> {state['chord']}"
+    else:
+        chord_text = f"Chords ({config.CHORD_HAND}): no hand"
+    cv2.putText(frame, chord_text, (10, 115),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, chord_color, 2)
+
+    dyn_color = (0, 255, 0) if state["dynamics_hand_visible"] else (0, 0, 255)
+    if state["dynamics_hand_visible"]:
+        dyn_text = f"Dynamics ({config.DYNAMICS_HAND}): {int(state['dynamics_value'] * 100)}%"
+    else:
+        dyn_text = f"Dynamics ({config.DYNAMICS_HAND}): no hand"
+    cv2.putText(frame, dyn_text, (10, 140),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, dyn_color, 2)
+
+    status_color = (0, 255, 255) if status == "PLAYING" else (200, 200, 200)
+    cv2.putText(frame, f"Status: {status}", (10, 165),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
 
     cv2.putText(frame, f"Press '{config.QUIT_KEY}' to quit", (10, frame.shape[0] - 15),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
     return frame
 
 
+def draw_dynamics_meter(frame, value: float):
+    """Draw a vertical level-meter bar on the right edge of the frame."""
+    h, w = frame.shape[:2]
+    bar_x1, bar_x2 = w - 40, w - 15
+    bar_top, bar_bottom = 50, h - 50
+
+    cv2.rectangle(frame, (bar_x1, bar_top), (bar_x2, bar_bottom), (200, 200, 200), 2)
+
+    fill_height = int((bar_bottom - bar_top) * value)
+    fill_top = bar_bottom - fill_height
+    if fill_height > 0:
+        cv2.rectangle(frame, (bar_x1, fill_top), (bar_x2, bar_bottom), (0, 255, 255), -1)
+
+    cv2.putText(frame, "VOL", (bar_x1 - 8, bar_top - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+    return frame
+
+
 def main():
-    print("Starting AirChord (Phase 2: hand detection)...")
+    print("Starting AirChord (Phase 4: audio playback)...")
+    print(f"Chord hand: {config.CHORD_HAND}   Dynamics hand: {config.DYNAMICS_HAND}")
     print(f"Press '{config.QUIT_KEY}' in the video window to quit.\n")
 
     try:
@@ -79,14 +163,31 @@ def main():
         return
 
     try:
-        detector = hand_detector.HandDetector()
+        detector = HandDetector()
     except RuntimeError as e:
         print(f"[ERROR] {e}")
         cap.release()
         return
 
+    try:
+        scale_selector = ScaleSelector()
+    except Exception as e:
+        print(f"[WARNING] Could not open the scale-selector window ({e}). "
+              f"Continuing with a fixed key of {config.DEFAULT_ROOT_NOTE}.")
+        scale_selector = None
+
+    try:
+        player = ChordPlayer()
+    except Exception as e:
+        print(f"[WARNING] Could not start audio playback ({e}). "
+              "Continuing without sound - gestures and chords still display normally.")
+        player = None
+
+    stabilizer = gesture.GestureStabilizer()
+
     prev_time = 0.0
     consecutive_failures = 0
+    last_played_gesture = None
 
     try:
         while True:
@@ -104,21 +205,40 @@ def main():
 
             frame = cv2.flip(frame, 1)
 
-            # --- Hand detection (guarded so one bad frame can't crash the app) ---
-            hand_detected = False
+            root_note = scale_selector.get_root_note() if scale_selector else config.DEFAULT_ROOT_NOTE
+
             try:
-                result = detector.detect(frame)
-                hand_detected = bool(result.hand_landmarks)
-                frame = detector.draw_landmarks(frame, result)
+                frame, state = process_frame(frame, detector, stabilizer, root_note)
             except Exception as e:
-                print(f"[WARNING] Hand detection failed on this frame: {e}")
+                print(f"[WARNING] Hand detection/gesture recognition failed on this frame: {e}")
+                state = _default_state()
+
+            # Trigger playback once per NEWLY confirmed gesture, not every frame it
+            # stays confirmed - this is the debounce/cooldown the spec asks for.
+            if player and state["gesture"] != last_played_gesture:
+                last_played_gesture = state["gesture"]
+                if state["gesture"] == "FIST":
+                    player.stop()
+                elif state["gesture"] in gesture.GESTURE_TO_DEGREE:
+                    player.play_chord(state["chord"], volume=state["dynamics_value"])
+                # "NONE"/"UNKNOWN" (e.g. a brief tracking gap): leave whatever's
+                # already playing to ring out naturally instead of cutting it off.
+
+            # Dynamics hand drives volume live, every frame, independent of triggering.
+            if player:
+                player.set_volume(state["dynamics_value"])
 
             current_time = time.time()
             fps = 1.0 / (current_time - prev_time) if prev_time else 0.0
             prev_time = current_time
 
-            frame = draw_overlay(frame, fps, hand_detected)
+            status = "PLAYING" if (player and player.is_playing()) else "READY"
+            frame = draw_overlay(frame, fps, state, root_note, status)
+            frame = draw_dynamics_meter(frame, state["dynamics_value"])
             cv2.imshow(config.WINDOW_NAME, frame)
+
+            if scale_selector:
+                scale_selector.update()
 
             key_pressed = cv2.waitKey(1) & 0xFF
             window_closed = cv2.getWindowProperty(config.WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1
@@ -128,6 +248,10 @@ def main():
         print("\nInterrupted by user (Ctrl+C).")
     finally:
         detector.close()
+        if scale_selector:
+            scale_selector.close()
+        if player:
+            player.close()
         cap.release()
         cv2.destroyAllWindows()
         print("Webcam released. AirChord closed cleanly.")
