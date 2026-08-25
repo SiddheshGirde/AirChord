@@ -2,26 +2,28 @@
 __pycache__/
 *.py[cod]
 *$py.class
- 
+
 # Virtual environments
 venv/
 env/
 .venv/
 ENV/
- 
+
 # Environment variables
 .env
- 
+
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
- 
+
 # OS
 .DS_Store
 Thumbs.db
- 
+
 # Logs
 *.log
- 
+
+# Downloaded ML model files (auto-downloaded on first run, see hand_detector.py)
+models/
