@@ -20,8 +20,10 @@ AirChord tracks **both hands** at once, each with a different job
 (configurable in `config.py` via `CHORD_HAND` / `DYNAMICS_HAND`):
 
 **Left hand — chords.** Finger shape → scale degree, transposed to whichever
-key you've selected. A chord plays once, as a single "strum", the moment a
-gesture becomes stable — holding the same shape doesn't retrigger it:
+key you've selected. A chord starts **looping continuously** the moment a
+gesture becomes stable, and keeps sounding until you either show a
+different chord gesture (which cleanly replaces it) or make a fist to
+stop it — a brief tracking blip on either hand won't interrupt or restart it:
 
 | Gesture | Degree | Chord in key of C (default) |
 |---------------------------------|--------|------------------------------|
@@ -42,12 +44,13 @@ to that key (e.g. "D" turns C/G/Am/F into D/A/Bm/G) — and so does the audio.
 ## About the audio
 
 Chords are **synthesized in code** (`chord_player.py`) from their component
-notes as additive sine waves, rather than loaded from pre-recorded files.
-This was a deliberate change from the original "one `.wav` per chord" plan:
-once the scale dropdown could transpose to any of 12 keys, a fixed 4-file
-library would only ever cover one of them. Synthesizing means every key
-just works, with no extra audio assets and no new dependency beyond
-`numpy` + `pygame` (already in `requirements.txt`).
+notes as additive sine waves and **looped continuously** while a gesture is
+held, rather than loaded from pre-recorded files or played as a fixed-length
+one-shot. This was a deliberate change from the original "one `.wav` per
+chord" plan: once the scale dropdown could transpose to any of 12 keys, a
+fixed 4-file library would only ever cover one of them. Synthesizing means
+every key just works, with no extra audio assets and no new dependency
+beyond `numpy` + `pygame` (already in `requirements.txt`).
 
 If you'd rather use real recorded/sampled chords instead, only
 `chord_player._get_sound()` needs to change — playback, debouncing,

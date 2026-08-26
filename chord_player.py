@@ -1,7 +1,8 @@
 """
 chord_player.py
 -----------------
-Turns a chord name (e.g. 'C', 'Bm') into sound and plays it through Pygame.
+Turns a chord name (e.g. 'C', 'Bm') into sound and plays it through Pygame,
+LOOPED continuously until explicitly changed or stopped.
 
 DESIGN NOTE: chords are SYNTHESIZED on the fly from their component notes
 (additive sine waves) rather than loaded from pre-recorded files. This is
@@ -11,8 +12,8 @@ key. Synthesizing means every key just works, with zero extra audio assets
 and no new dependency beyond numpy + pygame (already in requirements.txt).
 
 Swapping to real recorded/sampled chords later only requires changing
-_get_sound() below - everything else (debouncing, volume/dynamics control,
-stopping) stays exactly the same.
+_get_sound() below - everything else (looping, dynamics volume, stopping)
+stays exactly the same.
 """
 
 import numpy as np
@@ -54,10 +55,13 @@ def _chord_notes(chord_name: str):
 
 def _chord_to_waveform(chord_name: str) -> np.ndarray:
     """
-    Synthesize a chord as a sum of sine waves (one per note, plus a soft
-    octave-up harmonic per note for warmth), with a fade-in/out to avoid
-    clicks and an exponential decay so it sounds like a struck/plucked
-    chord rather than a static drone. Returns int16 stereo PCM samples.
+    Synthesize one loop-buffer's worth of a sustained chord: a sum of sine
+    waves (one per note, plus a soft octave-up harmonic per note for
+    warmth), at a STEADY volume - no decay - since this buffer is looped
+    continuously by play_chord(). A very short fade in/out (a few ms) is
+    still applied at the very start/end purely to avoid an audible "click"
+    at the loop seam; it does not make the sound fade out overall.
+    Returns int16 stereo PCM samples.
     """
     duration = config.CHORD_DURATION_SECONDS
     t = np.linspace(0, duration, int(SAMPLE_RATE * duration), endpoint=False)
@@ -70,14 +74,14 @@ def _chord_to_waveform(chord_name: str) -> np.ndarray:
         waveform += 0.25 * np.sin(2 * np.pi * (freq * 2) * t)  # octave-up harmonic
     waveform /= len(notes)
 
-    fade_samples = int(0.01 * SAMPLE_RATE)  # 10 ms fade in/out
+    # Tiny fade at the very start/end only, to prevent a click at the loop
+    # seam - this is NOT an overall decay, the sustained volume in between
+    # stays constant so the loop sounds like a held chord, not a fading one.
+    fade_samples = int(0.005 * SAMPLE_RATE)  # 5 ms
     envelope = np.ones_like(waveform)
     envelope[:fade_samples] = np.linspace(0, 1, fade_samples)
     envelope[-fade_samples:] = np.linspace(1, 0, fade_samples)
     waveform *= envelope
-
-    decay = np.exp(-config.CHORD_DECAY_RATE * t / duration)
-    waveform *= decay
 
     stereo = np.column_stack((waveform, waveform))
     return (stereo * 32767 * 0.4).astype(np.int16)  # 0.4 headroom - avoids clipping
@@ -98,14 +102,16 @@ class ChordPlayer:
         return self._sound_cache[chord_name]
 
     def play_chord(self, chord_name: str, volume: float = 1.0):
-        """Play `chord_name` (e.g. 'D', 'Bm') at 0.0-1.0 volume, replacing whatever
-        was playing before. Playback errors are caught and logged, never raised."""
+        """Start looping `chord_name` (e.g. 'D', 'Bm') continuously at 0.0-1.0
+        volume, replacing whatever was playing before. It keeps sounding until
+        play_chord() is called again with a different chord, or stop() is
+        called. Playback errors are caught and logged, never raised."""
         try:
             if self._current_channel is not None:
                 self._current_channel.stop()
             sound = self._get_sound(chord_name)
             sound.set_volume(max(0.0, min(1.0, volume)))
-            self._current_channel = sound.play()
+            self._current_channel = sound.play(loops=-1)  # -1 = loop forever
         except Exception as e:
             print(f"[WARNING] Could not play chord '{chord_name}': {e}")
 

@@ -46,5 +46,4 @@ GESTURE_STABLE_FRAMES = 5         # consecutive frames a gesture must hold to be
 DEFAULT_ROOT_NOTE = "C"
 
 # --- Audio synthesis settings (Phase 4) ---
-CHORD_DURATION_SECONDS = 1.2   # length of one synthesized chord "strum"
-CHORD_DECAY_RATE = 1.5         # higher = faster fade-out (exponential decay)
+CHORD_DURATION_SECONDS = 1.2   # length of the looped chord waveform buffer
