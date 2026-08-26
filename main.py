@@ -8,14 +8,15 @@ Builds on Phase 3 by adding:
     ... -> Gesture-to-Chord Mapping -> Chord Audio Playback -> Real-time UI
 
 What's new in this phase:
-    - A newly-CONFIRMED chord gesture (not every frame it stays confirmed)
-      triggers chord_player.play_chord() - a single "strum" per gesture
-      change, matching "plays once when the gesture becomes stable"
+    - A newly-CONFIRMED chord gesture starts that chord LOOPING continuously
+      - it sustains until you show a different chord gesture (which
+      replaces it) or make a fist (which stops it), not a fixed duration
     - The dynamics hand's openness continuously drives playback volume,
       live, every frame - not just at trigger time
-    - FIST stops all audio immediately
-    - A brief tracking gap (gesture -> NONE/UNKNOWN) does NOT cut the
-      currently playing chord - it's allowed to ring out/decay naturally
+    - A brief tracking gap on EITHER hand (gesture -> NONE/UNKNOWN, or the
+      dynamics hand momentarily lost) does not interrupt the sustained
+      chord or drop its volume, and does not cause an unwanted restart
+      when tracking picks back up
     - Chords are SYNTHESIZED (see chord_player.py) rather than loaded from
       files, so every one of the 12 keys works with zero audio assets
 
@@ -69,12 +70,15 @@ def _default_state():
     }
 
 
-def process_frame(frame, detector, stabilizer, root_note):
+def process_frame(frame, detector, stabilizer, root_note, last_dynamics_value=0.0):
     """
     Run hand detection + gesture/dynamics interpretation on one frame.
     Returns (frame_with_landmarks_drawn, state_dict).
     """
     state = _default_state()
+    # Preserve dynamics volume across a brief dynamics-hand tracking gap
+    # instead of snapping to 0 - a one-frame blip shouldn't drop the volume.
+    state["dynamics_value"] = last_dynamics_value
 
     result = detector.detect(frame)
     frame = detector.draw_landmarks(frame, result)
@@ -188,6 +192,7 @@ def main():
     prev_time = 0.0
     consecutive_failures = 0
     last_played_gesture = None
+    last_dynamics_value = 0.0
 
     try:
         while True:
@@ -208,24 +213,31 @@ def main():
             root_note = scale_selector.get_root_note() if scale_selector else config.DEFAULT_ROOT_NOTE
 
             try:
-                frame, state = process_frame(frame, detector, stabilizer, root_note)
+                frame, state = process_frame(frame, detector, stabilizer, root_note, last_dynamics_value)
             except Exception as e:
                 print(f"[WARNING] Hand detection/gesture recognition failed on this frame: {e}")
                 state = _default_state()
+                state["dynamics_value"] = last_dynamics_value
+            last_dynamics_value = state["dynamics_value"]
 
-            # Trigger playback once per NEWLY confirmed gesture, not every frame it
-            # stays confirmed - this is the debounce/cooldown the spec asks for.
-            if player and state["gesture"] != last_played_gesture:
-                last_played_gesture = state["gesture"]
-                if state["gesture"] == "FIST":
-                    player.stop()
-                elif state["gesture"] in gesture.GESTURE_TO_DEGREE:
-                    player.play_chord(state["chord"], volume=state["dynamics_value"])
-                # "NONE"/"UNKNOWN" (e.g. a brief tracking gap): leave whatever's
-                # already playing to ring out naturally instead of cutting it off.
-
-            # Dynamics hand drives volume live, every frame, independent of triggering.
+            # Chords now SUSTAIN continuously until you either show a different
+            # chord gesture or make a fist to stop - not a one-shot strum. So:
+            #   - a real chord gesture different from what's already looping
+            #     -> start looping the new one (replaces the old one cleanly)
+            #   - FIST (and we're not already stopped) -> stop looping
+            #   - NONE/UNKNOWN (e.g. a brief tracking gap) -> do NOT touch
+            #     last_played_gesture at all, so whatever's looping keeps
+            #     looping uninterrupted, and doesn't restart when the same
+            #     gesture reappears a frame later.
             if player:
+                if state["gesture"] in gesture.GESTURE_TO_DEGREE and state["gesture"] != last_played_gesture:
+                    last_played_gesture = state["gesture"]
+                    player.play_chord(state["chord"], volume=state["dynamics_value"])
+                elif state["gesture"] == "FIST" and last_played_gesture != "FIST":
+                    last_played_gesture = "FIST"
+                    player.stop()
+
+                # Dynamics hand drives volume live, every frame, of whatever's looping.
                 player.set_volume(state["dynamics_value"])
 
             current_time = time.time()
