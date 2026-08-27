@@ -4,10 +4,13 @@ gesture.py
 Turns raw MediaPipe hand-landmark detections into AirChord-specific meaning:
     - Splits a two-hand detection into "chord hand" and "dynamics hand"
       (which physical hand plays which role is set in config.py)
-    - Classifies the chord hand's finger-state pattern into a named gesture,
-      and smooths it over a few frames so it doesn't flicker
+    - Classifies the chord hand's finger-state pattern into a named gesture
+      by counting extended fingers (1-4), and smooths it over a few frames
+      so it doesn't flicker
     - Maps a gesture to a chord name
-    - Turns the dynamics hand's openness into a continuous 0.0-1.0 value
+    - Turns the dynamics hand's VERTICAL POSITION into a continuous
+      0.0-1.0 value - raise your hand for louder, matching the convention
+      most hand-tracking gesture-synth apps use
 
 This is pure geometry on landmark coordinates - no ML model, no audio -
 matching the "don't rely on image classification" requirement.
@@ -26,23 +29,14 @@ PINKY_MCP, PINKY_PIP, PINKY_TIP = 17, 18, 20
 CHROMATIC_NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 # Gesture -> (semitone offset from the selected root, chord quality).
-# This is the I-V-vi-IV progression - the same relationship as your
-# original C/G/Am/F mapping, expressed relative to a root note so the
-# whole progression can transpose to any key.
+# Ordered by finger count: 1=I, 2=IV, 3=V, 4=vi - the same four chords as
+# before (C/F/G/Am in the default key), just reassigned to a simple
+# "count your fingers 1-4" scheme instead of four different hand shapes.
 GESTURE_TO_DEGREE = {
-    "ONE_FINGER": (0, "Major"),   # I
-    "TWO_FINGERS": (7, "Major"),  # V
-    "ROCK_ON": (9, "Minor"),      # vi
-    "OPEN_PALM": (5, "Major"),    # IV
-}
-
-# (thumb, index, middle, ring, pinky) extended? -> gesture name
-GESTURE_PATTERNS = {
-    (False, True, False, False, False): "ONE_FINGER",
-    (False, True, True, False, False): "TWO_FINGERS",
-    (True, True, False, False, True): "ROCK_ON",
-    (True, True, True, True, True): "OPEN_PALM",
-    (False, False, False, False, False): "FIST",
+    "ONE_FINGER": (0, "Major"),     # I   (C)
+    "TWO_FINGERS": (5, "Major"),    # IV  (F)
+    "THREE_FINGERS": (7, "Major"),  # V   (G)
+    "FOUR_FINGERS": (9, "Minor"),   # vi  (Am)
 }
 
 
@@ -107,15 +101,34 @@ def get_finger_states(hand_landmarks):
 
 
 def classify_gesture(finger_states):
-    """Match a finger-state pattern to a named gesture, or 'UNKNOWN' if no match."""
-    pattern = (
-        finger_states["thumb"],
-        finger_states["index"],
-        finger_states["middle"],
-        finger_states["ring"],
-        finger_states["pinky"],
-    )
-    return GESTURE_PATTERNS.get(pattern, "UNKNOWN")
+    """
+    Classify by COUNTING extended fingers (thumb excluded from the count,
+    and its position doesn't matter here except for FIST):
+        0 non-thumb fingers, thumb also tucked -> FIST
+        1 (must be the index)                  -> ONE_FINGER
+        2 (must be index + middle)              -> TWO_FINGERS
+        3 (must be index + middle + ring)       -> THREE_FINGERS
+        4 (all four, in any combination)        -> FOUR_FINGERS
+    Anything else (e.g. only the ring finger up alone) -> UNKNOWN.
+    Requiring the natural counting order for 1-3 avoids odd shapes
+    (like "just the pinky") being read as a valid count.
+    """
+    count = sum([
+        finger_states["index"], finger_states["middle"],
+        finger_states["ring"], finger_states["pinky"],
+    ])
+
+    if count == 0 and not finger_states["thumb"]:
+        return "FIST"
+    if count == 1 and finger_states["index"]:
+        return "ONE_FINGER"
+    if count == 2 and finger_states["index"] and finger_states["middle"]:
+        return "TWO_FINGERS"
+    if count == 3 and finger_states["index"] and finger_states["middle"] and finger_states["ring"]:
+        return "THREE_FINGERS"
+    if count == 4:
+        return "FOUR_FINGERS"
+    return "UNKNOWN"
 
 
 def transpose_note(root_note: str, semitones: int) -> str:
@@ -143,26 +156,16 @@ def gesture_to_chord(gesture_name, root_note=None):
 
 def calculate_dynamics(hand_landmarks):
     """
-    Measure how "open" the dynamics hand is: average distance from each
-    fingertip to the wrist, normalized by palm width. A closed fist reads
-    near 0.0; a fully open, splayed hand reads near 1.0. The raw ratio is
-    remapped from [DYNAMICS_MIN_SPREAD_RATIO, DYNAMICS_MAX_SPREAD_RATIO]
-    (config.py) onto [0.0, 1.0].
+    Measure the dynamics hand's VERTICAL position in frame - raise your
+    hand for louder, lower it for quieter - which is the convention most
+    existing hand-tracking gesture/synth apps use (closer to a theremin
+    than to "squeeze harder for louder"). Uses the wrist landmark's y
+    (0.0 = top of frame, 1.0 = bottom), inverted and remapped from
+    [DYNAMICS_HIGH_Y, DYNAMICS_LOW_Y] (config.py) onto [1.0, 0.0].
     """
-    palm_width = _palm_width(hand_landmarks)
-    if palm_width < 1e-6:
-        return 0.0
-
-    wrist = hand_landmarks[WRIST]
-    fingertip_indices = [THUMB_TIP, INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP]
-    avg_tip_distance = sum(
-        _distance(hand_landmarks[i], wrist) for i in fingertip_indices
-    ) / len(fingertip_indices)
-
-    spread_ratio = avg_tip_distance / palm_width
-    span = config.DYNAMICS_MAX_SPREAD_RATIO - config.DYNAMICS_MIN_SPREAD_RATIO
-    value = (spread_ratio - config.DYNAMICS_MIN_SPREAD_RATIO) / span
-
+    wrist_y = hand_landmarks[WRIST].y
+    span = config.DYNAMICS_LOW_Y - config.DYNAMICS_HIGH_Y
+    value = (config.DYNAMICS_LOW_Y - wrist_y) / span
     return max(0.0, min(1.0, value))
 
 

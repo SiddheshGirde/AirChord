@@ -4,9 +4,8 @@
 your webcam, recognizes hand gestures, and plays the matching musical chord —
 no MIDI controller or instrument needed.
 
-> **Status:** Work in progress — currently on **Phase 4: Audio Playback**.
-> The full pipeline now runs end to end. UI polish and documentation are
-> finished off next (see [Roadmap](#roadmap)).
+> **Status:** Feature-complete — the full pipeline runs end to end. This is
+> Phase 6: final polish, stability, and documentation (see [Roadmap](#roadmap)).
 
 ## Pipeline
 
@@ -19,27 +18,32 @@ Gesture-to-Chord Mapping → Chord Audio Playback → Real-time UI
 AirChord tracks **both hands** at once, each with a different job
 (configurable in `config.py` via `CHORD_HAND` / `DYNAMICS_HAND`):
 
-**Left hand — chords.** Finger shape → scale degree, transposed to whichever
-key you've selected. A chord starts **looping continuously** the moment a
-gesture becomes stable, and keeps sounding until you either show a
-different chord gesture (which cleanly replaces it) or make a fist to
-stop it — a brief tracking blip on either hand won't interrupt or restart it:
+**Left hand — chords.** Hold up a number of fingers to pick a chord. A
+chord starts **looping continuously** the moment a gesture becomes stable,
+and keeps sounding until you either hold up a different number of fingers
+(which cleanly replaces it) or make a fist to stop it — a brief tracking
+blip on either hand won't interrupt or restart it:
 
 | Gesture | Degree | Chord in key of C (default) |
-|---------------------------------|--------|------------------------------|
-| ☝️ One finger                   | I      | C                            |
-| ✌️ Two fingers                  | V      | G                            |
-| 🤟 Rock on (thumb+index+pinky)  | vi     | Am                           |
-| 🖐️ Open palm                    | IV     | F                            |
-| ✊ Fist                          | —      | Stop (silences audio)        |
+|----------------|--------|------------------------------|
+| ☝️ 1 finger    | I      | C                            |
+| ✌️ 2 fingers   | IV     | F                            |
+| 🤟 3 fingers   | V      | G                            |
+| 🖐️ 4 fingers   | vi     | Am                           |
+| ✊ Fist (0)     | —      | Stop (silences audio)        |
 
-**Right hand — dynamics.** How open/spread your hand is continuously
-controls playback volume in real time (closed fist ≈ quiet, fully open ≈
-loud) — shown as a live meter bar on the right edge of the video.
+Counting starts at the index finger (1 = index, 2 = +middle, 3 = +ring,
+4 = all four) — the thumb doesn't count towards the number, so it can rest
+anywhere comfortable.
+
+**Right hand — dynamics.** Your hand's **vertical position** controls
+playback volume in real time — raise it for louder, lower it for quieter
+(the same convention used by most existing hand-tracking gesture/synth
+apps) — shown as a live meter bar on the right edge of the video.
 
 **Scale / Key dropdown.** A small always-on-top window (Tkinter) lets you
 pick any of the 12 chromatic root notes; the progression above transposes
-to that key (e.g. "D" turns C/G/Am/F into D/A/Bm/G) — and so does the audio.
+to that key (e.g. "D" turns C/F/G/Am into D/G/A/Bm) — and so does the audio.
 
 ## About the audio
 
@@ -53,8 +57,8 @@ every key just works, with no extra audio assets and no new dependency
 beyond `numpy` + `pygame` (already in `requirements.txt`).
 
 If you'd rather use real recorded/sampled chords instead, only
-`chord_player._get_sound()` needs to change — playback, debouncing,
-dynamics-driven volume, and stopping all stay exactly the same.
+`chord_player._get_sound()` needs to change — looping, dynamics-driven
+volume, and stopping all stay exactly the same.
 
 ## Tech Stack
 
@@ -74,7 +78,7 @@ AirChord/
 ├── main.py              # Entry point - webcam + gesture + audio loop
 ├── config.py             # Configuration constants
 ├── hand_detector.py      # MediaPipe hand detection
-├── gesture.py             # Finger-state, dynamics, and scale logic
+├── gesture.py             # Finger-count, dynamics, and scale logic
 ├── scale_selector.py      # Tkinter key/scale dropdown
 ├── chord_player.py        # Synthesizes & plays chords through Pygame
 ├── requirements.txt
@@ -107,7 +111,13 @@ files, there are no `.wav` assets to store. See "About the audio" above.*
    (Tkinter ships with the standard python.org Windows installer, so no
    separate install is needed there.)
 
-## Running (Phase 4)
+   **If VS Code underlines local imports (e.g. `chord_player`) as unresolved:**
+   that's the editor's linter, not a real error - it usually means VS Code
+   was opened on individual files rather than the project folder. Use
+   **File → Open Folder → AirChord** so it can see sibling modules. The app
+   runs correctly with `python main.py` either way.
+
+## Running
 
 ```
 python main.py
@@ -118,21 +128,40 @@ landmark model (a few MB) into `models/` — this needs an internet connection
 once. After that it runs fully offline.
 
 Two windows open: the webcam feed, and a small "AirChord - Scale" panel with
-a key dropdown. Show your **left hand** to play a chord gesture and your
-**right hand** open/closed to control volume — both tracked at the same
-time, with sound coming through your speakers. The overlay shows FPS, the
-selected key, the recognized gesture and chord, a dynamics meter, and a
-Status line (READY / PLAYING). Press **q** (with the video window focused)
-to quit.
+a key dropdown. Show your **left hand** with a finger-count gesture to play
+a chord and move your **right hand** up/down to control volume — both
+tracked at the same time, with sound through your speakers. The overlay
+shows the recognized gesture and chord, the selected key, a dynamics meter,
+Status (READY/PLAYING), and FPS. Press **q** (with the video window
+focused) to quit.
+
+## Concepts for your viva
+
+Quick map from the brief's required concepts to where each one actually
+lives in the code:
+
+| Concept | Where |
+|---|---|
+| Video frame acquisition | `cap.read()` loop in `main.py` |
+| Frame processing | `cv2.flip()` (mirroring) in `main.py` |
+| RGB/BGR conversion | `hand_detector.HandDetector.detect()` converts BGR→RGB before MediaPipe (OpenCV is BGR, MediaPipe expects RGB) |
+| Image resizing | `cap.set(CAP_PROP_FRAME_WIDTH/HEIGHT)` in `open_webcam()` |
+| Hand/ROI detection | MediaPipe `HandLandmarker` in `hand_detector.py` |
+| Landmark extraction | `result.hand_landmarks` - 21 (x, y, z) points per hand |
+| Feature extraction | `gesture.get_finger_states()` (extended/folded per finger), `gesture.calculate_dynamics()` (vertical position) |
+| Gesture classification | `gesture.classify_gesture()` - pure geometry/finger-counting, no ML model |
+| Real-time processing | the `while True` loop in `main.py`, one pass per camera frame |
+| Temporal smoothing / debouncing | `gesture.GestureStabilizer` (requires N consecutive frames before "confirming" a gesture) + the play-once-per-change trigger logic in `main.py` |
+| FPS measurement | timestamp delta between frames in `main.py`'s loop |
 
 ## Roadmap
 
 - [x] Phase 1 — Project setup + webcam capture
 - [x] Phase 2 — MediaPipe hand detection & landmark visualization
 - [x] Phase 3 — Two-hand gesture recognition, dynamics & scale selection
-- [ ] Phase 4 — Chord audio playback
-- [ ] Phase 5 — Full pipeline integration
-- [ ] Phase 6 — UI polish, stability, error handling, docs
+- [x] Phase 4 — Chord audio playback
+- [x] Phase 5 — Full pipeline integration (built incrementally into one app throughout, rather than as a separate step)
+- [ ] Phase 6 — UI polish, stability, error handling, docs *(this pass - pending your final test)*
 
 ## License
 

@@ -35,11 +35,12 @@ DYNAMICS_HAND = "Right"    # This hand controls continuous dynamics/expression
 # Thumb tip must be at least this many "palm-widths" from the pinky-base
 # landmark to count as extended. Handedness-independent by design.
 THUMB_EXTENDED_RATIO = 1.0
-# calculate_dynamics() normalizes avg-fingertip-spread / palm-width between
-# these two values. These are reasonable starting points - nudge them while
-# watching the on-screen dynamics bar if it feels off on your hand/camera.
-DYNAMICS_MIN_SPREAD_RATIO = 1.2   # ~closed hand -> dynamics 0.0
-DYNAMICS_MAX_SPREAD_RATIO = 2.4   # ~fully open hand -> dynamics 1.0
+# calculate_dynamics() uses the dynamics hand's vertical position, remapped
+# from [DYNAMICS_HIGH_Y, DYNAMICS_LOW_Y] (near top / near bottom of frame)
+# onto [1.0, 0.0] loudness. These are reasonable starting points - nudge
+# them while watching the on-screen dynamics bar if the range feels off.
+DYNAMICS_HIGH_Y = 0.15   # hand near top of frame    -> dynamics 1.0 (loudest)
+DYNAMICS_LOW_Y = 0.85    # hand near bottom of frame -> dynamics 0.0 (quietest)
 GESTURE_STABLE_FRAMES = 5         # consecutive frames a gesture must hold to be "confirmed"
 
 # --- Scale settings (Phase 3) ---

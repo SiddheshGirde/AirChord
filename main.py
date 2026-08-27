@@ -1,27 +1,25 @@
 """
 main.py
 --------
-AirChord - Phase 4: Audio Playback
+AirChord - real-time webcam gesture-to-chord player.
 
-Builds on Phase 3 by adding:
+Full pipeline:
+    Webcam -> Frame Acquisition -> OpenCV Processing -> MediaPipe Hand
+    Detection -> Landmark Extraction -> Gesture Recognition (+ Scale
+    Selection) -> Gesture-to-Chord Mapping -> Chord Audio Playback ->
+    Real-time UI
 
-    ... -> Gesture-to-Chord Mapping -> Chord Audio Playback -> Real-time UI
-
-What's new in this phase:
-    - A newly-CONFIRMED chord gesture starts that chord LOOPING continuously
-      - it sustains until you show a different chord gesture (which
-      replaces it) or make a fist (which stops it), not a fixed duration
-    - The dynamics hand's openness continuously drives playback volume,
-      live, every frame - not just at trigger time
-    - A brief tracking gap on EITHER hand (gesture -> NONE/UNKNOWN, or the
-      dynamics hand momentarily lost) does not interrupt the sustained
-      chord or drop its volume, and does not cause an unwanted restart
-      when tracking picks back up
-    - Chords are SYNTHESIZED (see chord_player.py) rather than loaded from
-      files, so every one of the 12 keys works with zero audio assets
-
-Everything from Phases 1-3 (webcam, hand detection, gestures, dynamics,
-scale selection) is unchanged.
+How it plays:
+    - LEFT hand shows a finger-count gesture (0-4 fingers) that selects a
+      chord; RIGHT hand's vertical position controls volume (config.py's
+      CHORD_HAND / DYNAMICS_HAND can swap which physical hand does which)
+    - A newly-CONFIRMED gesture starts that chord LOOPING continuously -
+      it sustains until you show a different gesture (replaces it
+      cleanly) or make a fist (stops it) - not a fixed duration
+    - A brief tracking gap on either hand does not interrupt the
+      sustained chord, drop its volume, or cause an unwanted restart
+    - Chords are SYNTHESIZED (see chord_player.py) rather than loaded
+      from files, so all 12 keys work with zero audio assets
 """
 
 import sys
@@ -103,37 +101,49 @@ def process_frame(frame, detector, stabilizer, root_note, last_dynamics_value=0.
     return frame, state
 
 
+def _format_gesture_display(gesture_name: str) -> str:
+    """'TWO_FINGERS' -> 'TWO FINGERS', 'NONE' -> 'NONE' - readable on-screen labels."""
+    return gesture_name.replace("_", " ")
+
+
+def _format_chord_display(chord_name: str) -> str:
+    """'Am' -> 'A MINOR', 'C' -> 'C MAJOR', 'STOP'/'-' unchanged."""
+    if chord_name in ("-", "STOP"):
+        return chord_name
+    if chord_name.endswith("m"):
+        return f"{chord_name[:-1]} MINOR"
+    return f"{chord_name} MAJOR"
+
+
 def draw_overlay(frame, fps: float, state: dict, root_note: str, status: str):
-    """Draw the Phase 4 UI text: title, FPS, key, hand statuses, playback status."""
-    cv2.putText(frame, "AirChord - Phase 4 (Audio)", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    cv2.putText(frame, f"FPS: {int(fps)}", (10, 60),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    cv2.putText(frame, f"Key: {root_note}", (10, 85),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+    """Draw the UI text, styled after the project brief's AIRCHORD / dashes /
+    labeled-fields mockup, plus the extra fields this project added (key,
+    per-hand visibility, dynamics)."""
+    w = frame.shape[1]
+
+    def text(label, y, scale=0.6, color=(0, 255, 0), thickness=2):
+        cv2.putText(frame, label, (10, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness)
+
+    text("AIRCHORD", 30, 0.8, (0, 255, 0), 2)
+    cv2.line(frame, (10, 42), (w - 45, 42), (120, 120, 120), 1)
 
     chord_color = (0, 255, 0) if state["chord_hand_visible"] else (0, 0, 255)
-    if state["chord_hand_visible"]:
-        chord_text = f"Chords ({config.CHORD_HAND}): {state['gesture']} -> {state['chord']}"
-    else:
-        chord_text = f"Chords ({config.CHORD_HAND}): no hand"
-    cv2.putText(frame, chord_text, (10, 115),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, chord_color, 2)
+    gesture_label = (_format_gesture_display(state["gesture"]) if state["chord_hand_visible"]
+                      else "no hand")
+    text(f"Gesture ({config.CHORD_HAND}): {gesture_label}", 68, color=chord_color)
+    text(f"Chord: {_format_chord_display(state['chord'])}   Key: {root_note}", 93, color=(255, 255, 0))
 
     dyn_color = (0, 255, 0) if state["dynamics_hand_visible"] else (0, 0, 255)
-    if state["dynamics_hand_visible"]:
-        dyn_text = f"Dynamics ({config.DYNAMICS_HAND}): {int(state['dynamics_value'] * 100)}%"
-    else:
-        dyn_text = f"Dynamics ({config.DYNAMICS_HAND}): no hand"
-    cv2.putText(frame, dyn_text, (10, 140),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, dyn_color, 2)
+    dyn_label = f"{int(state['dynamics_value'] * 100)}%" if state["dynamics_hand_visible"] else "no hand"
+    text(f"Dynamics ({config.DYNAMICS_HAND}): {dyn_label}", 118, color=dyn_color)
 
     status_color = (0, 255, 255) if status == "PLAYING" else (200, 200, 200)
-    cv2.putText(frame, f"Status: {status}", (10, 165),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
+    text(f"Status: {status}", 143, color=status_color)
+    text(f"FPS: {int(fps)}", 168, color=(0, 255, 0))
 
-    cv2.putText(frame, f"Press '{config.QUIT_KEY}' to quit", (10, frame.shape[0] - 15),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    cv2.line(frame, (10, 180), (w - 45, 180), (120, 120, 120), 1)
+    text(f"Press '{config.QUIT_KEY}' to quit", frame.shape[0] - 15, scale=0.5,
+         color=(200, 200, 200), thickness=1)
     return frame
 
 
@@ -156,7 +166,7 @@ def draw_dynamics_meter(frame, value: float):
 
 
 def main():
-    print("Starting AirChord (Phase 4: audio playback)...")
+    print("Starting AirChord...")
     print(f"Chord hand: {config.CHORD_HAND}   Dynamics hand: {config.DYNAMICS_HAND}")
     print(f"Press '{config.QUIT_KEY}' in the video window to quit.\n")
 
@@ -168,7 +178,7 @@ def main():
 
     try:
         detector = HandDetector()
-    except RuntimeError as e:
+    except Exception as e:
         print(f"[ERROR] {e}")
         cap.release()
         return

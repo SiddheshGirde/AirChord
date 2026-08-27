@@ -87,7 +87,14 @@ class HandDetector:
             min_hand_presence_confidence=config.MIN_HAND_PRESENCE_CONFIDENCE,
             min_tracking_confidence=config.MIN_TRACKING_CONFIDENCE,
         )
-        self._landmarker = HandLandmarker.create_from_options(options)
+        try:
+            self._landmarker = HandLandmarker.create_from_options(options)
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not load the hand landmark model at '{model_path}' ({e}). "
+                "It may be corrupted - try deleting the models/ folder and "
+                "running again so it re-downloads."
+            )
         self._start_time = time.time()
 
     def detect(self, frame_bgr):
