@@ -34,6 +34,17 @@ from scale_selector import ScaleSelector
 from chord_player import ChordPlayer
 
 
+def _validate_config():
+    """Catch a common misconfiguration early with a clear message, instead
+    of both hands silently fighting over the same role at runtime."""
+    if config.CHORD_HAND == config.DYNAMICS_HAND:
+        raise RuntimeError(
+            f"config.CHORD_HAND and config.DYNAMICS_HAND are both set to "
+            f"'{config.CHORD_HAND}' - they need to be different hands "
+            f"('Left' and 'Right', in either order)."
+        )
+
+
 def open_webcam(camera_index: int) -> cv2.VideoCapture:
     """Open the webcam and return a ready-to-use VideoCapture object.
 
@@ -48,9 +59,11 @@ def open_webcam(camera_index: int) -> cv2.VideoCapture:
 
     if not cap.isOpened():
         raise RuntimeError(
-            f"Could not open webcam at index {camera_index}. "
-            "Make sure a camera is connected and not already in use "
-            "by another application."
+            f"Could not open webcam at index {camera_index}. Check that: "
+            "a camera is connected; it isn't already in use by another "
+            "app (Zoom, Teams, another AirChord instance, ...); and on "
+            "Windows, Settings > Privacy & security > Camera has access "
+            "turned on for desktop apps."
         )
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
@@ -169,6 +182,12 @@ def main():
     print("Starting AirChord...")
     print(f"Chord hand: {config.CHORD_HAND}   Dynamics hand: {config.DYNAMICS_HAND}")
     print(f"Press '{config.QUIT_KEY}' in the video window to quit.\n")
+
+    try:
+        _validate_config()
+    except RuntimeError as e:
+        print(f"[ERROR] {e}")
+        return
 
     try:
         cap = open_webcam(config.CAMERA_INDEX)

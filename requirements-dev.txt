@@ -1,0 +1,3 @@
+# Extra dependencies for running the test suite (tests/) - not needed to
+# run AirChord itself, only to run `pytest`.
+pytest>=7.0
