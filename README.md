@@ -4,8 +4,10 @@
 your webcam, recognizes hand gestures, and plays the matching musical chord —
 no MIDI controller or instrument needed.
 
-> **Status:** Feature-complete — the full pipeline runs end to end. This is
-> Phase 6: final polish, stability, and documentation (see [Roadmap](#roadmap)).
+> **Status:** All six planned phases complete — webcam capture, hand
+> detection, gesture recognition, audio playback, integration, and a
+> polish/testing pass (see [Roadmap](#roadmap)). Still worth a final
+> real-camera test pass on your end, especially the dynamics feel.
 
 ## Pipeline
 
@@ -81,7 +83,12 @@ AirChord/
 ├── gesture.py             # Finger-count, dynamics, and scale logic
 ├── scale_selector.py      # Tkinter key/scale dropdown
 ├── chord_player.py        # Synthesizes & plays chords through Pygame
+├── conftest.py             # Lets tests/ import the modules above
+├── tests/
+│   ├── test_gesture.py       # Finger-counting, dynamics, transposition, ...
+│   └── test_chord_player.py  # Note frequencies, chord voicing, waveform safety
 ├── requirements.txt
+├── requirements-dev.txt    # Just pytest - only needed to run tests/
 ├── README.md
 ├── .gitignore
 ├── assets/
@@ -90,6 +97,19 @@ AirChord/
 
 *No `chords/` folder - since audio is synthesized rather than loaded from
 files, there are no `.wav` assets to store. See "About the audio" above.*
+
+## Testing
+
+`tests/` covers the pure-logic parts of the project - finger-count
+classification, chord/key transposition, dynamics, temporal smoothing, and
+chord waveform synthesis - using synthetic hand-landmark data, so it runs
+in well under a second with no camera, MediaPipe model, or audio device
+needed:
+
+```
+pip install -r requirements-dev.txt
+pytest
+```
 
 ## Setup
 
@@ -161,7 +181,7 @@ lives in the code:
 - [x] Phase 3 — Two-hand gesture recognition, dynamics & scale selection
 - [x] Phase 4 — Chord audio playback
 - [x] Phase 5 — Full pipeline integration (built incrementally into one app throughout, rather than as a separate step)
-- [ ] Phase 6 — UI polish, stability, error handling, docs *(this pass - pending your final test)*
+- [x] Phase 6 — UI polish, stability, error handling, docs, and a `tests/` suite
 
 ## License
 
